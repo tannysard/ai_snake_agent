@@ -1,76 +1,172 @@
-# Autonomous Snake AI with Deep Q-Learning (DQN)
+# Autonomous Snake Agent with Deep Q-Learning
 
-![Python](https://img.shields.io/badge/Python-3.8%2B-blue?logo=python)
-![PyTorch](https://img.shields.io/badge/PyTorch-EE4C2C?logo=pytorch&logoColor=white)
-![Pygame](https://img.shields.io/badge/Pygame-Environment-green)
-![License](https://img.shields.io/badge/License-MIT-yellow)
+A reinforcement-learning agent that learns to play the classic Snake game using a Deep Q-Network (DQN), PyTorch, and Pygame.
 
-An autonomous Reinforcement Learning agent that learns to play the classic Snake game completely from scratch using **Deep Q-Networks (DQN)**, built with PyTorch and Pygame. 
+The agent starts without hand-written pathfinding rules such as A* or Dijkstra. It learns from game transitions and scalar rewards, gradually improving its ability to collect food, avoid collisions, and survive for longer episodes. The documented training run reached a peak score of **90**.
 
-The agent starts with zero heuristic rules or pathfinding algorithms (such as A* or Dijkstra). Through trial, error, and scalar reward feedback, it develops an emergent strategy for food acquisition, self-preservation, and obstacle avoidance—peaking at a high score of **90**.
+## Highlights
 
----
+- Custom Snake environment built with Pygame
+- Relative action space that prevents illegal 180-degree turns
+- Compact 11-feature state representation instead of raw-pixel input
+- Feed-forward PyTorch Q-network
+- Experience replay for less-correlated training samples
+- Epsilon-greedy exploration that decays during training
+- Live score and mean-score plotting with Matplotlib
 
-## Architecture & Reinforcement Learning Design
-┌────────────────────────────────────────────────────────┐
-│                       Environment                      │
-│               (Custom Pygame Engine)                   │
-└─────────────▲────────────────────────────┬─────────────┘
-│                            │
-Action   │                            │ State (11-dim)
-[S, R, L]  │                            │ Reward (+10, -10, 0)
-│                            │ Done (Bool)
-┌─────────────┴────────────────────────────▼─────────────┐
-│                          Agent                         │
-│        Linear_QNet (PyTorch) + Experience Replay       │
-└────────────────────────────────────────────────────────┘
-### 1. Relative Action Space
-Instead of fixed directional inputs (`UP`, `DOWN`, `LEFT`, `RIGHT`) which can trigger illegal 180° reversals, actions are evaluated **relative to the snake's current heading vector**:
-* `[1, 0, 0]`: Continue Straight
-* `[0, 1, 0]`: Turn Right (Clockwise 90°)
-* `[0, 0, 1]`: Turn Left (Counter-Clockwise 90°)
+## How the Agent Works
 
-### 2. 11-Dimensional State Vector
-Rather than feeding raw pixels into high-overhead Convolutional Neural Networks (CNNs), the agent operates on a compact 11-element boolean feature vector:
-* **Danger Lookahead (3):** `[danger_straight, danger_right, danger_left]` (checks 1 block ahead for wall boundaries and body collisions).
-* **Current Heading (4):** `[moving_left, moving_right, moving_up, moving_down]` (one-hot encoded).
-* **Relative Food Location (4):** `[food_left, food_right, food_up, food_down]` (boolean indicators relative to snake head coordinates).
+### Environment and actions
 
-### 3. Bellman Optimality Update
-The agent approximates the optimal action-value function $Q^*(s, a)$ via a feedforward neural network (`Linear_QNet`). Network weights are updated using the Bellman equation:
+At each step, the agent chooses one action relative to the snake's current heading:
 
-$$Q_{\text{new}}(s, a) = R + \gamma \max_{a'} Q(s', a')$$
+| Action | Meaning |
+| --- | --- |
+| `straight` | Continue in the current direction |
+| `right` | Turn 90 degrees clockwise |
+| `left` | Turn 90 degrees counter-clockwise |
 
-*(Where $Q_{\text{new}}(s, a) = R$ if the transition terminates in a terminal state).*
+Using relative actions avoids presenting the network with moves that would immediately reverse the snake into itself.
 
-* **Discount Factor ($\gamma$):** `0.9` (balances immediate food acquisition with extended survival).
-* **Loss Function:** Mean Squared Error ($\text{MSE}$) between predicted $Q(s, a)$ and target $Q_{\text{new}}(s, a)$.
-* **Optimizer:** Adam with learning rate $\alpha = 0.001$.
+### State representation
 
-### 4. Experience Replay & Exploration Strategy
-* **Experience Replay Buffer:** Past transitions $(s, a, r, s', \text{done})$ are accumulated in a circular deque buffer (capacity: 100,000). At the end of each game episode, a random batch of 1,000 transitions is sampled to break temporal correlations between successive frames.
-* **$\epsilon$-Greedy Policy:** Balances exploration and exploitation via dynamic epsilon decay:
-  $$\epsilon = \max(0, 80 - \text{episode})$$
-  Ensures the agent shifts from random trial-and-error to deterministic policy exploitation as learning stabilizes.
+The agent receives an 11-element feature vector:
 
----
+1. **Danger ahead (3):** collision risk straight, to the right, and to the left
+2. **Current direction (4):** one-hot flags for left, right, up, and down
+3. **Food position (4):** whether the food is left, right, above, or below the head
+
+The danger features check the next grid cell for wall or body collisions. This compact representation is inexpensive to train, but it does not provide complete information about distant dead ends or the full board layout.
+
+### Reward design
+
+The environment provides a positive reward for eating food, a negative reward for dying, and a neutral reward for an ordinary step. The values used by the documented implementation are:
+
+- **Food:** `+10`
+- **Death:** `-10`
+- **Ordinary move:** `0`
+
+### DQN update
+
+The Q-network estimates the value of each action. Training uses the Bellman target:
+
+\[
+Q_{target}(s,a) = r + \gamma \max_{a'} Q(s', a')
+\]
+
+For terminal transitions, the future-value term is omitted. The documented training configuration uses:
+
+| Setting | Value |
+| --- | --- |
+| Discount factor (`gamma`) | `0.9` |
+| Optimizer | Adam |
+| Learning rate | `0.001` |
+| Loss | Mean squared error |
+| Replay capacity | `100,000` transitions |
+| End-of-game batch size | `1,000` transitions |
+| Exploration schedule | `max(0, 80 - episode)` |
+
+## Architecture
+
+```text
+┌──────────────────────┐
+│   Pygame environment │
+└──────────┬───────────┘
+           │ state, reward, done
+           ▼
+┌──────────────────────┐
+│       DQN agent      │
+│  Linear_QNet + Adam  │
+└──────────┬───────────┘
+           │ relative action
+           └──────────────► environment
+```
+
+The implementation is described as four main responsibilities:
+
+- `game.py`: Snake environment, movement, collisions, food, and scoring
+- `agent.py`: state extraction, action selection, replay memory, and training loop
+- `model.py`: `Linear_QNet` and the Q-learning trainer
+- `helper.py`: live training metrics and plotting
 
 ## Project Structure
 
+The intended project layout is:
+
 ```text
-├── agent.py         # RL Agent logic, state parsing, memory buffer, and main training loop
-├── game.py          # Custom Pygame environment (step function, relative turns, starvation checks)
-├── model.py         # PyTorch Linear_QNet architecture and QTrainer optimization pipeline
-├── helper.py        # Real-time Matplotlib performance plotting utility
+.
+├── agent.py
+├── game.py
+├── model.py
+├── helper.py
+├── requirements.txt
 ├── model/
-│   └── model.pth    # Saved PyTorch checkpoint weights for the peak-performing run
-├── requirements.txt # Project dependencies
+│   └── model.pth
 └── README.md
-Installation & SetupClone the repository:Bashgit clone [https://github.com/](https://github.com/)<your-username>/<your-repo-name>.git
-cd <your-repo-name>
-Create and activate a virtual environment:Bashpython -m venv venv
-source venv/bin/activate       # On Windows: venv\Scripts\activate
-Install dependencies:Bashpip install -r requirements.txt
-Running the Training PipelineTo launch the environment and start training the agent with real-time score plotting:Bashpython agent.py
-Training Dynamics Across Episodes:Episodes 1–20: High exploration ($\epsilon \approx 80$). Random navigation, frequent wall collisions, and low survival rates.Episodes 20–60: The agent learns basic survival mechanics, avoiding immediate 1-step collisions and tracking food coordinates.Episodes 80+: Exploration turns off ($\epsilon \le 0$). The model exploits learned Q-values, executing targeted food runs and reaching sustained scores between 30–70+, with recorded peaks reaching 90.Key Learnings & Future RoadmapDead-End Trapping: Because the 11-dimensional state space only inspects danger 1 step ahead, the agent is susceptible to trapping itself in self-enclosed loops at high body lengths ($>60$).Double DQN (DDQN): Decoupling action selection from action evaluation using a target network to mitigate overestimation bias.Multi-Step Lookahead: Expanding the state space to 2-step danger inspection or integrating spatial flood-fill features to detect dead ends before entering them.LicenseDistributed under the MIT License. See LICENSE for more information.
-<FollowUp label="Want a test.py script to watch your saved model.pth play without retraining?" qu
+```
+
+`model/model.pth` is a saved checkpoint when a trained model has been produced. Checkpoints and generated plots may not be included in every checkout.
+
+## Installation
+
+### Requirements
+
+- Python 3.8 or newer
+- A working Pygame display for visual training
+- pip
+
+### Setup
+
+```bash
+git clone https://github.com/tannysard/ai_snake_agent.git
+cd ai_snake_agent
+
+python -m venv .venv
+
+# Linux/macOS
+source .venv/bin/activate
+
+# Windows PowerShell
+# .venv\Scripts\Activate.ps1
+
+pip install -r requirements.txt
+```
+
+## Run Training
+
+Start the training loop with:
+
+```bash
+python agent.py
+```
+
+The environment opens a Pygame window while the agent trains. The helper module displays the current score and running mean score. Training may take many episodes before the policy becomes stable.
+
+## Training Behavior
+
+Typical learning stages are:
+
+- **Early episodes:** exploration dominates, so collisions and low scores are expected.
+- **Middle episodes:** the agent begins avoiding immediate collisions and following the food direction.
+- **Later episodes:** exploration decreases and the learned Q-values drive more consistent food-seeking behavior.
+
+Results depend on the random seed, runtime, hardware, and exact implementation. The peak score of 90 is a reference from the documented run, not a guaranteed result.
+
+## Limitations and Future Work
+
+Because the state only checks immediate danger and relative food direction, the agent can still enter long-term traps that are not visible in the current feature vector. Potential improvements include:
+
+- Double DQN with a separate target network
+- Multi-step returns or prioritized experience replay
+- Two-step or multi-step danger features
+- Flood-fill or reachable-area features for dead-end detection
+- A separate evaluation mode for replaying a saved checkpoint
+- Configurable seeds and command-line training parameters
+
+## License
+
+No `LICENSE` file is currently included in the repository. Add a license file before distributing the project under a specific license.
+
+## Acknowledgements
+
+This project is intended as a compact example of applying Deep Q-Learning to a discrete game environment with a small, hand-designed state space.
